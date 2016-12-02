@@ -19,6 +19,7 @@
 
 package com.cloudant.sync.internal.sqlite;
 
+
 import com.cloudant.sync.documentstore.encryption.KeyProvider;
 import com.cloudant.sync.documentstore.encryption.NullKeyProvider;
 import com.cloudant.sync.internal.documentstore.migrations.Migration;
@@ -53,8 +54,8 @@ public class SQLDatabaseFactory {
             tempInMemoryDB = internalOpenSQLDatabase(null, new NullKeyProvider());
             tempInMemoryDB.beginTransaction();
             try {
-                tempInMemoryDB.execSQL(String.format("CREATE VIRTUAL TABLE %s USING FTS4 ( col )",
-                        FTS_CHECK_TABLE_NAME));
+//                tempInMemoryDB.execSQL(String.format("CREATE VIRTUAL TABLE %s USING FTS4 ( col )",
+//                    FTS_CHECK_TABLE_NAME));
                 return true;
             } finally {
                 // End the transaction and rollback the virtual table we created because we never
