@@ -51,17 +51,17 @@ public abstract class PeriodicReplicationService<T extends PeriodicReplicationRe
     /* We store the elapsed time since booting at which the next alarm is due in SharedPreferences
      * using this key. This is used to adjust alarm times when components bind to or unbind from
      * this Service. */
-    private static final String PREFERENCE_ALARM_DUE_ELAPSED_TIME = "com.cloudant.sync.replication.PeriodicReplicationService.alarmDueElapsed";
+    private static final String PREFERENCE_ALARM_DUE_ELAPSED_TIME_SUFFIX = ".alarmDueElapsed";
 
     /* We store the wall-clock time at which the next alarm is due in SharedPreferences
      * using this key. This is used to set the initial alarm after a reboot. */
-    private static final String PREFERENCE_ALARM_DUE_CLOCK_TIME = "com.cloudant.sync.replication.PeriodicReplicationService.alarmDueClock";
+    private static final String PREFERENCE_ALARM_DUE_CLOCK_TIME_SUFFIX = ".alarmDueClock";
 
     /* We store a flag indicating whether periodic replications are enabled in SharedPreferences
      * using this key. We have to store the flag persistently as the service may be stopped and
      * started by the operating system. */
-    private static final String PREFERENCE_PERIODIC_REPLICATION_ENABLED
-        = "com.cloudant.sync.replication.PeriodicReplicationService.periodicReplicationsActive";
+    private static final String PREFERENCE_PERIODIC_REPLICATION_ENABLED_SUFFIX
+        = ".periodicReplicationsActive";
 
     private static final long MILLISECONDS_IN_SECOND = 1000L;
 
@@ -213,9 +213,9 @@ public abstract class PeriodicReplicationService<T extends PeriodicReplicationRe
      */
     private void setNextAlarmDue(long intervalMillis) {
         SharedPreferences.Editor editor = mPrefs.edit();
-        editor.putLong(PREFERENCE_ALARM_DUE_ELAPSED_TIME,
+        editor.putLong(getClass().getName() + PREFERENCE_ALARM_DUE_ELAPSED_TIME_SUFFIX,
             SystemClock.elapsedRealtime() + intervalMillis);
-        editor.putLong(PREFERENCE_ALARM_DUE_CLOCK_TIME,
+        editor.putLong(getClass().getName() + PREFERENCE_ALARM_DUE_CLOCK_TIME_SUFFIX,
             System.currentTimeMillis() + intervalMillis);
         editor.apply();
     }
@@ -225,7 +225,7 @@ public abstract class PeriodicReplicationService<T extends PeriodicReplicationRe
      * at which the next periodic replication should begin.
      */
     private long getNextAlarmDueElapsedTime() {
-        return mPrefs.getLong(PREFERENCE_ALARM_DUE_ELAPSED_TIME, 0);
+        return mPrefs.getLong(getClass().getName() + PREFERENCE_ALARM_DUE_ELAPSED_TIME_SUFFIX, 0);
     }
 
     /**
@@ -233,7 +233,7 @@ public abstract class PeriodicReplicationService<T extends PeriodicReplicationRe
      * periodic replication should begin.
      */
     private long getNextAlarmDueClockTime() {
-        return mPrefs.getLong(PREFERENCE_ALARM_DUE_CLOCK_TIME, 0);
+        return mPrefs.getLong(getClass().getName() + PREFERENCE_ALARM_DUE_CLOCK_TIME_SUFFIX, 0);
     }
 
     /**
@@ -242,7 +242,7 @@ public abstract class PeriodicReplicationService<T extends PeriodicReplicationRe
      */
     private void setPeriodicReplicationEnabled(boolean running) {
         SharedPreferences.Editor editor = mPrefs.edit();
-        editor.putBoolean(PREFERENCE_PERIODIC_REPLICATION_ENABLED, running);
+        editor.putBoolean(getClass().getName() + PREFERENCE_PERIODIC_REPLICATION_ENABLED_SUFFIX, running);
         editor.apply();
     }
 
@@ -251,7 +251,8 @@ public abstract class PeriodicReplicationService<T extends PeriodicReplicationRe
      * replications are currently enabled.
      */
     private boolean isPeriodicReplicationEnabled() {
-        return mPrefs.getBoolean(PREFERENCE_PERIODIC_REPLICATION_ENABLED, false);
+        return mPrefs.getBoolean(getClass().getName() + PREFERENCE_PERIODIC_REPLICATION_ENABLED_SUFFIX,
+            false);
     }
 
     /**
