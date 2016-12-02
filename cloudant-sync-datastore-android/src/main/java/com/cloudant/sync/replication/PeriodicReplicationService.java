@@ -51,11 +51,11 @@ public abstract class PeriodicReplicationService<T extends PeriodicReplicationRe
     /* We store the elapsed time since booting at which the next alarm is due in SharedPreferences
      * using this key. This is used to adjust alarm times when components bind to or unbind from
      * this Service. */
-    private static final String PREFERENCE_ALARM_DUE_ELAPSED_TIME_SUFFIX = ".alarmDueElapsed";
+    private static final String PREFERENCE_LAST_ALARM_ELAPSED_TIME_SUFFIX = ".lastAlarmElapsed";
 
     /* We store the wall-clock time at which the next alarm is due in SharedPreferences
      * using this key. This is used to set the initial alarm after a reboot. */
-    private static final String PREFERENCE_ALARM_DUE_CLOCK_TIME_SUFFIX = ".alarmDueClock";
+    private static final String PREFERENCE_LAST_ALARM_CLOCK_TIME_SUFFIX = ".lastAlarmClock";
 
     /* We store a flag indicating whether periodic replications are enabled in SharedPreferences
      * using this key. We have to store the flag persistently as the service may be stopped and
@@ -68,6 +68,7 @@ public abstract class PeriodicReplicationService<T extends PeriodicReplicationRe
     public static final int COMMAND_START_PERIODIC_REPLICATION = 2;
     public static final int COMMAND_STOP_PERIODIC_REPLICATION = 3;
     public static final int COMMAND_DEVICE_REBOOTED = 4;
+    public static final int COMMAND_RESET_REPLICATION_TIMERS = 5;
 
     private static final String TAG = "PRS";
 
@@ -77,6 +78,37 @@ public abstract class PeriodicReplicationService<T extends PeriodicReplicationRe
 
     protected PeriodicReplicationService(Class<T> clazz) {
         this.clazz = clazz;
+    }
+
+    /**
+     * If the stored preferences are in the old format, upgrade them to the new format so that
+     * the app continues to work after upgrade to this version.
+     */
+    private void upgradePreferences() {
+        String alarmDueElapsed = "com.cloudant.sync.replication.PeriodicReplicationService.alarmDueElapsed";
+        if (mPrefs.contains(alarmDueElapsed)) {
+            // These are old style preferences. We need to rewrite them in the new form that allows
+            // multiple replication policies.
+            String alarmDueClock = "com.cloudant.sync.replication.PeriodicReplicationService.alarmDueClock";
+            String replicationsActive = "com.cloudant.sync.replication.PeriodicReplicationService.periodicReplicationsActive";
+            long elapsed = mPrefs.getLong(alarmDueElapsed, 0);
+            long clock = mPrefs.getLong(alarmDueClock, 0);
+            boolean enabled = mPrefs.getBoolean(replicationsActive, false);
+
+            SharedPreferences.Editor editor = mPrefs.edit();
+            String className = getClass().getName();
+            editor.putLong(className + PREFERENCE_LAST_ALARM_ELAPSED_TIME_SUFFIX,
+                elapsed - (getIntervalInSeconds() * MILLISECONDS_IN_SECOND));
+            editor.putLong(className + PREFERENCE_LAST_ALARM_CLOCK_TIME_SUFFIX,
+                clock - (getIntervalInSeconds() * MILLISECONDS_IN_SECOND));
+            editor.putBoolean(className + PREFERENCE_PERIODIC_REPLICATION_ENABLED_SUFFIX, enabled);
+
+            editor.remove(alarmDueElapsed);
+            editor.remove(alarmDueClock);
+            editor.remove(replicationsActive);
+
+            editor.apply();
+        }
     }
 
     protected class ServiceHandler extends ReplicationService.ServiceHandler {
@@ -96,6 +128,9 @@ public abstract class PeriodicReplicationService<T extends PeriodicReplicationRe
                 case COMMAND_DEVICE_REBOOTED:
                     resetAlarmDueTimesOnReboot();
                     break;
+                case COMMAND_RESET_REPLICATION_TIMERS:
+                    restartPeriodicReplications();
+                    break;
                 default:
                     // Do nothing
                     break;
@@ -113,6 +148,7 @@ public abstract class PeriodicReplicationService<T extends PeriodicReplicationRe
     @Override
     public void onCreate() {
         mPrefs = getSharedPreferences(PREFERENCES_FILE_NAME, Context.MODE_PRIVATE);
+        upgradePreferences();
         super.onCreate();
     }
 
@@ -120,7 +156,6 @@ public abstract class PeriodicReplicationService<T extends PeriodicReplicationRe
     public synchronized IBinder onBind(Intent intent) {
         mBound = true;
         if (isPeriodicReplicationEnabled()) {
-            updateAlarmTimeOnBind();
             restartPeriodicReplications();
         } else if (startReplicationOnBind()) {
             startPeriodicReplication();
@@ -133,7 +168,6 @@ public abstract class PeriodicReplicationService<T extends PeriodicReplicationRe
         super.onUnbind(intent);
         mBound = false;
         if (isPeriodicReplicationEnabled()) {
-            updateAlarmTimeOnUnbind();
             restartPeriodicReplications();
         }
         // Ensure onRebind is called when new clients bind to the service.
@@ -145,7 +179,6 @@ public abstract class PeriodicReplicationService<T extends PeriodicReplicationRe
         super.onRebind(intent);
         mBound = true;
         if (isPeriodicReplicationEnabled()) {
-            updateAlarmTimeOnBind();
             restartPeriodicReplications();
         } else if (startReplicationOnBind()) {
             startPeriodicReplication();
@@ -155,7 +188,7 @@ public abstract class PeriodicReplicationService<T extends PeriodicReplicationRe
     @Override
     protected void startReplications() {
         super.startReplications();
-        setNextAlarmDue(getIntervalInSeconds() * MILLISECONDS_IN_SECOND);
+        setLastAlarmTime(0);
     }
 
     /** Start periodic replications. */
@@ -170,8 +203,13 @@ public abstract class PeriodicReplicationService<T extends PeriodicReplicationRe
             // to the Service would be unreliable.
             PendingIntent pendingAlarmIntent = PendingIntent.getBroadcast(this, 0, alarmIntent, 0);
 
+            long next = getNextAlarmDueElapsedTime();
+            long now = SystemClock.elapsedRealtime();
+            if (next < now) {
+                next = now;
+            }
             alarmManager.setInexactRepeating(AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                getNextAlarmDueElapsedTime(),
+                next,
                 getIntervalInSeconds() * MILLISECONDS_IN_SECOND,
                 pendingAlarmIntent);
         } else {
@@ -211,11 +249,12 @@ public abstract class PeriodicReplicationService<T extends PeriodicReplicationRe
      * useless.
      * @param intervalMillis The time interval in milliseconds until the next alarm.
      */
-    private void setNextAlarmDue(long intervalMillis) {
+    private void setLastAlarmTime(long intervalMillis) {
         SharedPreferences.Editor editor = mPrefs.edit();
-        editor.putLong(getClass().getName() + PREFERENCE_ALARM_DUE_ELAPSED_TIME_SUFFIX,
+        String className = getClass().getName();
+        editor.putLong(className + PREFERENCE_LAST_ALARM_ELAPSED_TIME_SUFFIX,
             SystemClock.elapsedRealtime() + intervalMillis);
-        editor.putLong(getClass().getName() + PREFERENCE_ALARM_DUE_CLOCK_TIME_SUFFIX,
+        editor.putLong(className + PREFERENCE_LAST_ALARM_CLOCK_TIME_SUFFIX,
             System.currentTimeMillis() + intervalMillis);
         editor.apply();
     }
@@ -225,7 +264,8 @@ public abstract class PeriodicReplicationService<T extends PeriodicReplicationRe
      * at which the next periodic replication should begin.
      */
     private long getNextAlarmDueElapsedTime() {
-        return mPrefs.getLong(getClass().getName() + PREFERENCE_ALARM_DUE_ELAPSED_TIME_SUFFIX, 0);
+        return mPrefs.getLong(getClass().getName() + PREFERENCE_LAST_ALARM_ELAPSED_TIME_SUFFIX, 0)
+            + (getIntervalInSeconds() * MILLISECONDS_IN_SECOND);
     }
 
     /**
@@ -233,7 +273,8 @@ public abstract class PeriodicReplicationService<T extends PeriodicReplicationRe
      * periodic replication should begin.
      */
     private long getNextAlarmDueClockTime() {
-        return mPrefs.getLong(getClass().getName() + PREFERENCE_ALARM_DUE_CLOCK_TIME_SUFFIX, 0);
+        return mPrefs.getLong(getClass().getName() + PREFERENCE_LAST_ALARM_CLOCK_TIME_SUFFIX, 0)
+            + (getIntervalInSeconds() * MILLISECONDS_IN_SECOND);
     }
 
     /**
@@ -279,10 +320,10 @@ public abstract class PeriodicReplicationService<T extends PeriodicReplicationRe
         long initialInterval = getNextAlarmDueClockTime() - System.currentTimeMillis();
         if (initialInterval < 0) {
             initialInterval = 0;
-            setNextAlarmDue(initialInterval);
+            setLastAlarmTime(initialInterval);
         } else if (initialInterval > getIntervalInSeconds() * MILLISECONDS_IN_SECOND) {
-            initialInterval = getIntervalInSeconds() * MILLISECONDS_IN_SECOND;
-            setNextAlarmDue(initialInterval);
+            initialInterval = -getIntervalInSeconds() * MILLISECONDS_IN_SECOND;
+            setLastAlarmTime(initialInterval);
         }
     }
 
@@ -296,28 +337,6 @@ public abstract class PeriodicReplicationService<T extends PeriodicReplicationRe
         } else {
             return getUnboundIntervalInSeconds();
         }
-    }
-
-    /** Update the SharedPreferences to store the time the next alarm is due at using the
-     *  bound time interval between replications.
-     */
-    private void updateAlarmTimeOnBind() {
-        long dueTime = getNextAlarmDueElapsedTime();
-        long newDueTime = dueTime - (getUnboundIntervalInSeconds() * MILLISECONDS_IN_SECOND)
-            + (getBoundIntervalInSeconds() * MILLISECONDS_IN_SECOND)
-            - SystemClock.elapsedRealtime();
-        setNextAlarmDue(newDueTime);
-    }
-
-    /** Update the SharedPreferences to store the time the next alarm is due at using the
-     *  unbound time interval between replications.
-     */
-    private void updateAlarmTimeOnUnbind() {
-        long dueTime = getNextAlarmDueElapsedTime();
-        long newDueTime = dueTime - (getBoundIntervalInSeconds() * MILLISECONDS_IN_SECOND)
-            + (getUnboundIntervalInSeconds() * MILLISECONDS_IN_SECOND)
-            - SystemClock.elapsedRealtime();
-        setNextAlarmDue(newDueTime);
     }
 
     /**
