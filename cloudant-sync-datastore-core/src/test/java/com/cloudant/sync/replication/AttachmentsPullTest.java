@@ -287,7 +287,13 @@ public class AttachmentsPullTest extends ReplicationTestBase {
         ReplicatorImpl pull = (ReplicatorImpl) getPullBuilder().pullAttachmentsInline
                 (pullAttachmentsInline).build();
         pull.strategy.getEventBus().register(listener);
-        pull.strategy.run();
+        // Retry the replication until it succeeds
+        int attempts = 0;
+        int maxAttempts = 5;
+        do {
+            pull.strategy.run();
+            attempts++;
+        } while (!listener.finishCalled && attempts <= maxAttempts);
         listener.assertReplicationCompletedOrThrow();
         return new PullResult((PullStrategy) pull.strategy, listener);
     }
